@@ -1,0 +1,232 @@
+---
+title: "Project 1 - Song stroy by Tanya Zhang"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+#install.packages("slam")
+#install.packages("pacman")
+#pacman::p_load(tm)
+#install.packages("data.table", dependencies=TRUE)
+#install.packages("tidytext")
+#install.packages("tidyverse")
+#install.packages("DT")
+library(tm)
+library(data.table)
+library(tidytext)
+library(tidyverse)
+library(DT)
+load(" /Users/tanya/Documents/GitHub/Spring2020-Project1-14Tanya/data/lyrics.RData")
+leadingWhitespace <- content_transformer(function(x) str_trim(x, side = "both"))
+data("stop_words")
+word <- c("lot", "today", "months", "month", "wanna", "wouldnt", "wasnt", "ha", "na", "ooh", "da",
+          "gonna", "im", "dont", "aint", "wont", "yeah", "la", "oi", "nigga", "fuck",
+          "hey", "year", "years", "last", "past", "feel")
+stop_words <- c(stop_words$word, word)
+corpus <- VCorpus(VectorSource(dt_lyrics$lyrics))%>%
+  tm_map(content_transformer(tolower))%>%
+  tm_map(removePunctuation)%>%
+  tm_map(removeWords, character(0))%>%
+  tm_map(removeWords, stop_words)%>%
+  tm_map(removeNumbers)%>%
+  tm_map(stripWhitespace)%>%
+  tm_map(leadingWhitespace)
+
+stemmed <- tm_map(corpus, stemDocument) %>%
+  tidy() %>%
+  select(text)
+
+dict <- tidy(corpus) %>%
+  select(text) %>%
+  unnest_tokens(dictionary, text)
+
+completed <- stemmed %>%
+  mutate(id = row_number()) %>%
+  unnest_tokens(stems, text) %>%
+  bind_cols(dict) 
+
+completed <- completed %>%
+  group_by(stems) %>%
+  count(dictionary) %>%
+  mutate(word = dictionary[which.max(n)]) %>%
+  ungroup() %>%
+  select(stems, word) %>%
+  distinct() %>%
+  right_join(completed) %>%
+  select(-stems)
+
+completed <- completed %>%
+  group_by(id) %>%
+  summarise(stemmedwords= str_c(word, collapse = " ")) %>%
+  ungroup()
+
+dt_lyrics <- dt_lyrics %>%
+  mutate(id = row_number()) %>%
+  inner_join(completed)
+
+save(dt_lyrics, file="/Users/tanya/Documents/GitHub/Spring2020-Project1-14Tanya/output/processed_lyrics.RData")
+
+#------------------------------------------------------------#
+#install.packages("plotly")
+#install.packages("scales")
+#install.packages("wordcloud2")
+#install.packages("gridExtra")
+#install.packages("ngram")
+#install.packages("shiny")
+
+library(tidyverse)
+library(tidytext)
+library(plotly)
+library(DT)
+library(tm)
+library(data.table)
+library(scales)
+library(wordcloud2)
+library(gridExtra)
+library(ngram)
+library(shiny) 
+
+
+load('/Users/tanya/Documents/GitHub/Spring2020-Project1-14Tanya/output/processed_lyrics.RData') 
+dt_artist <- fread('/Users/tanya/Documents/GitHub/Spring2020-Project1-14Tanya/data/artists.csv 
+') 
+lyrics_list <- c("Folk", "R&B", "Electronic", "Jazz", "Indie", "Country", "Rock", "Metal", "Pop", "Hip-Hop", "Other")
+time_list <- c("1970s", "1980s", "1990s", "2000s", "2010s")
+corpus <- VCorpus(VectorSource(dt_lyrics$stemmedwords))
+word_tibble <- tidy(corpus) %>%
+  select(text) %>%
+  mutate(id = row_number()) %>%
+  unnest_tokens(word, text)
+
+ui <- navbarPage(strong("Lyrics Analysis"),
+                 tabPanel("Overview",
+                          titlePanel("Most frequent words"),
+                          # Sidebar layout with input and output definitions ----
+                          sidebarLayout(
+                            # Sidebar panel for inputs ----
+                            sidebarPanel(
+                              sliderInput(inputId = "nwords1",
+                                          label = "Number of terms in the first word cloud:",
+                                          min = 5, max = 100, value = 50),
+                              selectInput('genre1', 'Genre of the first word cloud', 
+                                          lyrics_list, selected='Folk')
+                            ),
+                            # Main panel for displaying outputs ----
+                            mainPanel(
+                              wordcloud2Output(outputId = "WC1", height = "300")
+                            )
+                          ),
+                          hr(),
+                          sidebarLayout(
+                            # Sidebar panel for inputs ----
+                            sidebarPanel(
+                              sliderInput(inputId = "nwords2",
+                                          label = "Number of terms in the second word cloud:",
+                                          min = 5, max = 100, value = 50),
+                              selectInput('genre2', 'Genre of the second word cloud', 
+                                          lyrics_list, selected='Metal')
+                            ),
+                            # Main panel for displaying outputs ----
+                            mainPanel(
+                              wordcloud2Output(outputId = "WC2", height = "300")
+                            )
+                          )
+                 ),
+                 tabPanel("Time Variation",
+                          # Sidebar layout with input and output definitions ----
+                          sidebarLayout(
+                            # Sidebar panel for inputs ----
+                            sidebarPanel(
+                              selectInput('decade1', 'Selected decade for the first plot:', 
+                                          time_list, selected='1970s'),
+                              selectInput('decade2', 'Selected decade for the second plot:', 
+                                          time_list, selected='1980s'),
+                              numericInput(inputId = "topBigrams",
+                                           label = "Number of top pairs to view:",
+                                           min = 1,
+                                           max = 20,
+                                           value = 10)
+                              
+                            ),
+                            # Main panel for displaying outputs ----
+                            mainPanel(
+                              fluidRow(
+                                column(5,
+                                       plotlyOutput("bigram1")),
+                                column(5,
+                                       plotlyOutput("bigram2"))
+                              )
+                            )
+                          )
+                 ),
+                 tabPanel("Data", 
+                          DT::dataTableOutput("table"))
+)
+
+server <- function(input, output) {
+  output$WC1 <- renderWordcloud2({
+    count(filter(word_tibble, id %in% which(dt_lyrics$genre == input$genre1)), word, sort = TRUE) %>%
+      slice(1:input$nwords1) %>%
+      wordcloud2(size=0.6, rotateRatio=0.2)
+  })
+  output$WC2 <- renderWordcloud2({
+    count(filter(word_tibble, id %in% which(dt_lyrics$genre == input$genre2)), word, sort = TRUE) %>%
+      slice(1:input$nwords2) %>%
+      wordcloud2(size=0.6, rotateRatio=0.2)
+  })
+  output$bigram1 <- renderPlotly({
+    year_start <- as.integer(substr(input$decade1, 1, 4))
+    dt_sub <- filter(dt_lyrics, year>=year_start) %>%
+      filter(year<(year_start+10))
+    lyric_bigrams <- dt_sub %>%
+      unnest_tokens(bigram, stemmedwords, token = "ngrams", n = 2)
+    bigram_counts <- lyric_bigrams %>%
+      separate(bigram, c("word1", "word2"), sep = " ") %>%
+      count(word1, word2, sort = TRUE)
+    combined_words <- apply(bigram_counts[c(1, 2)], 1, paste , collapse = " " )[1:input$topBigrams]
+    x_names <- factor(combined_words, levels = rev(combined_words))
+    plot_ly(
+      x = bigram_counts$n[1:input$topBigrams],
+      y = x_names,
+      name = "Bigram",
+      type = "bar",
+      orientation = 'h'
+    )
+  })
+  output$bigram2 <- renderPlotly({
+    year_start <- as.integer(substr(input$decade2, 1, 4))
+    dt_sub <- filter(dt_lyrics, year>=year_start) %>%
+      filter(year<(year_start+10))
+    lyric_bigrams <- dt_sub %>%
+      unnest_tokens(bigram, stemmedwords, token = "ngrams", n = 2)
+    bigram_counts <- lyric_bigrams %>%
+      separate(bigram, c("word1", "word2"), sep = " ") %>%
+      count(word1, word2, sort = TRUE)
+    combined_words <- apply(bigram_counts[c(1, 2)], 1, paste , collapse = " " )[1:input$topBigrams]
+    x_names <- factor(combined_words, levels = rev(combined_words))
+    plot_ly(
+      x = bigram_counts$n[1:input$topBigrams],
+      y = x_names,
+      name = "Bigram",
+      type = "bar",
+      orientation = 'h'
+    )
+  })
+  output$table <- DT::renderDataTable({
+    DT::datatable(dt_lyrics)
+  })
+}
+
+shinyApp(ui, server)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
